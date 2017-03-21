@@ -5,6 +5,9 @@ all: vcat
 install: vcat
 	install -s "$<" "${HOME}/bin/"
 
+test: vcat
+	vcat /.xyzzy >/dev/null
+
 clean:
 	rm -f vcat
 
