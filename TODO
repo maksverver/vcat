@@ -1,0 +1,8 @@
+ - Allow output to terminal as long as stdout != stderr.
+ - Finish vcp
+ - Add a README.md
+ - Put on Github
+
+Add a vcp script:
+	if last arg is a dir, copy each file to dir
+	otherwise, takes two file paths, copy a to b
