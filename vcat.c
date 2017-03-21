@@ -155,20 +155,25 @@ static void run_test() {
 
 /* Processes the given file, while updating the status bar. Returns 0 on success, 1 on error. */
 static int cat(const char *filename, int fd) {
-	static char buffer[1<<20];  /* 1 MiB */
-	int64_t nread, pos = 0;
+	/* Implementation note: CIFS filesystems fail mysteriously reading the last few bytes of
+	large files when we try to read 1 MiB at a time. So instead, we read smaller blocks, and
+	only update the progress bar once for every megabyte. */
+	static char buffer[1<<16];  /* 64 KiB */
 	start_progress(filename);
-	while ((nread = read(fd, buffer, sizeof(buffer))) > 0) {
-		if (write(OUT, buffer, nread) != nread) {
-			end_progress();
-			perror(filename);
-			return 1;
-		}
+	int64_t pos = 0, nread;
+	while ((nread = read(fd, buffer, sizeof(buffer))) > 0 &&
+			write(OUT, buffer, nread) == nread) {
+		int64_t prev_pos = pos;
 		pos += nread;
-		update_progress(filename, pos);
+		if (pos >> 20 > prev_pos >> 20) {
+			update_progress(filename, pos);
+		}
 	}
+	/* Update a final time, because we may not have hit a 1 MiB boundary in the last iteration. */
+	update_progress(filename, pos);
 	end_progress();
-	if (nread < 0) {
+	if (nread != 0) {
+		/* Note: if nread < 0, then read() failed. If nread > 0, then write() failed. */
 		perror(filename);
 		return 1;
 	}
