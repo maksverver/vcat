@@ -168,7 +168,11 @@ static int cat(const char *filename, int fd) {
 		update_progress(filename, pos);
 	}
 	end_progress();
-	return nread < 0;
+	if (nread < 0) {
+		perror(filename);
+		return 1;
+	}
+	return 0;
 }
 
 int main(int argc, char *argv[]) {
