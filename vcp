@@ -1,0 +1,49 @@
+#!/bin/sh
+
+set -e
+
+dir=$(dirname "$(readlink -f "$0")")
+vcat=$dir/vcat
+
+if [ ! -e "$vcat" ]; then
+	echo "$vcat: file not found."
+	exit 1
+fi
+if [ ! -x "$vcat" ]; then
+	echo "$vcat: not executable."
+	exit 1
+fi
+
+if [ $# -lt 2 ]; then
+	echo 'Usage: vcp <source...> <destination>'
+	exit 1
+fi
+
+copy() {
+	if [ "$(readlink -f "$1")" = "$(readlink -f "$2")" ]
+	then
+		# Prevent clobbering output!
+		echo "$1 and $2 refer to the same file"
+	else
+		vcat "$1" >"$2"
+	fi
+}
+
+for last; do :; done
+
+if [ -d "$last" ]; then
+	# Mode 1: copy one or more files to a target directory.
+	prev=''
+	for cur; do
+		if [ -n "$prev" ]; then
+			copy "$prev" "$last/$(basename "$prev")"
+		fi
+		prev=$cur
+	done
+elif [ $# -ne 2 ]; then
+	echo "$2 is not a directory"
+	exit 1
+else
+	# Mode 2: copy one file to another location.
+	copy "$1" "$2"
+fi

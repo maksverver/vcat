@@ -1,5 +1,6 @@
  - Allow output to terminal as long as stdout != stderr.
  - Finish vcp
+ - Add also vmv like vcp?
  - Add a README.md
  - Put on Github
 
