@@ -38,17 +38,24 @@ Example usage:
 #include <time.h>
 #include <unistd.h>
 
-#define INP 0
-#define OUT 1
-#define ERR 2
+#define FD_IN 0
+#define FD_OUT 1
+#define FD_ERR 2
 
-#define MIN_WIDTH 1
 #define MAX_WIDTH 9999
 
 #define TRAILER "[ETA %2d:%02d] %3d%%"
 
+/* Terminal window size. Used by update_progress() to determine how wide the
+   progress bar should be. */
 static struct winsize ws;
-static struct stat st;
+
+/* Current file properties. st.st_size is used by update_progress() to determine
+   how much progress has been made (and to estimate the time remaining). */
+static struct stat st;  /* Current file properties. */
+
+/* Time we started copying the current file. Initialized by start_progress().
+   Used by update_progress() to estimate the time remaining. */
 static time_t time_start;
 
 /* Writes `filename` in the buffer of the given size, terminating the result
@@ -69,24 +76,27 @@ static void write_filename(const char *filename, char *buf, size_t len) {
 	snprintf(buf, len, "%s", filename);
 }
 
+/* Renders the progress bar, written to standard error. */
 static void update_progress(const char *filename, int64_t pos) {
 	static char buffer[MAX_WIDTH + 1];
 
 	/* Check terminal size again, in case user resized the window. */
 	int previous_width = ws.ws_col;
-        if (ioctl(ERR, TIOCGWINSZ, &ws) != 0 || ws.ws_col < MIN_WIDTH || ws.ws_col > MAX_WIDTH) {
-		return;
+        if (ioctl(FD_ERR, TIOCGWINSZ, &ws) != 0 || ws.ws_col <= 0 || ws.ws_col > MAX_WIDTH) {
+		return;  /* invalid width */
 	}
 	if (previous_width != ws.ws_col) {
 		/* Clear from cursor to end of screen. */
 		fputs("\033[0J", stderr);
 	}
 
+	/* Calculate progress as a percentage. */
 	int percentage = 100;
 	if (st.st_size > 0 && pos < st.st_size) {
 		percentage = 100 * pos / st.st_size;
 	}
 
+	/* Estimate remaining time. */
 	int minutes = 99;
 	int seconds = 99;
 	if (pos >= st.st_size) {
@@ -105,7 +115,7 @@ static void update_progress(const char *filename, int64_t pos) {
 	if (trailer_size > ws.ws_col) {
 		trailer_size = ws.ws_col;
 	}
-	int filename_size = ws.ws_col - trailer_size - 2;
+	int filename_size = (int)ws.ws_col - trailer_size - 2;
 	if (filename_size > 0) {
 		write_filename(filename, buffer + 1, filename_size + 1);
 	}
@@ -113,7 +123,7 @@ static void update_progress(const char *filename, int64_t pos) {
 
 	/* Select colors. Bright, white foreground. Green background. */
 	fputs("\033[1;37;42m", stderr);
-	int x = ws.ws_col;
+	int x = ws.ws_col;  /* cross-over point */
 	if (st.st_size > 0) {
 		x = (int64_t)x * pos / st.st_size;
 	}
@@ -128,6 +138,7 @@ static void update_progress(const char *filename, int64_t pos) {
 	fputc('\r', stderr);
 	/* Reset colors. */
 	fputs("\033[0m", stderr);
+	/* Flush to make sure terminal is up-to-date. */
 	fflush(stderr);
 }
 
@@ -140,6 +151,7 @@ static void end_progress() {
 	fputc('\n', stderr);
 }
 
+/* Simulates the copying of a file. Useful for testing. */
 static void run_test() {
 	const char *filename = "/some/example/filename.xyz";
 	int64_t pos = 0;
@@ -153,16 +165,18 @@ static void run_test() {
 	end_progress();
 }
 
-/* Processes the given file, while updating the status bar. Returns 0 on success, 1 on error. */
+/* Processes the given file, while updating the status bar.
+   Returns 0 on success, 1 on error. */
 static int cat(const char *filename, int fd) {
-	/* Implementation note: CIFS filesystems fail mysteriously reading the last few bytes of
-	large files when we try to read 1 MiB at a time. So instead, we read smaller blocks, and
-	only update the progress bar once for every megabyte. */
+	/* Implementation note: CIFS filesystems fail mysteriously reading the last
+	   few bytes of large files when we try to read 1 MiB at a time. So instead,
+	   we read smaller blocks, and only update the progress bar once for every
+	   megabyte. */
 	static char buffer[1<<16];  /* 64 KiB */
 	start_progress(filename);
 	int64_t pos = 0, nread;
 	while ((nread = read(fd, buffer, sizeof(buffer))) > 0 &&
-			write(OUT, buffer, nread) == nread) {
+			write(FD_OUT, buffer, nread) == nread) {
 		int64_t prev_pos = pos;
 		pos += nread;
 		if (pos >> 20 > prev_pos >> 20) {
@@ -185,24 +199,20 @@ int main(int argc, char *argv[]) {
 		fprintf(stderr, "Usage: vcat <file...>\n");
 		return 1;
 	}
-	if (isatty(OUT)) {
+	if (isatty(FD_OUT)) {
 		fprintf(stderr, "Standard output is a TTY!\n");
 		return 1;
 	}
-	if (!isatty(ERR)) {
+	if (!isatty(FD_ERR)) {
 		fprintf(stderr, "Standard output is not a TTY!\n");
 		return 1;
 	}
-	if (ioctl(ERR, TIOCGWINSZ, &ws) != 0) {
+	if (ioctl(FD_ERR, TIOCGWINSZ, &ws) != 0) {
 		perror(NULL);
 		return 1;
 	}
-	if (ws.ws_col < MIN_WIDTH) {
-		fprintf(stderr, "Terminal width too small: %d\n", ws.ws_col);
-		return 1;
-	}
-	if (ws.ws_col > MAX_WIDTH) {
-		fprintf(stderr, "Terminal width too large: %d\n", ws.ws_col);
+	if (ws.ws_col <= 0 || ws.ws_col > MAX_WIDTH) {
+		fprintf(stderr, "Invalid terminal width: %d (max: %d)\n", ws.ws_col, MAX_WIDTH);
 		return 1;
 	}
 
@@ -213,7 +223,7 @@ int main(int argc, char *argv[]) {
 			continue;
 		}
 		if (strcmp(argv[i], "-") == 0) {
-			failed |= cat("<stdin>", INP);
+			failed |= cat("<stdin>", FD_IN);
 			continue;
 		}
 		if (stat(argv[i], &st) != 0) {
